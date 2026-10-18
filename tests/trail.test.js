@@ -40,14 +40,14 @@ test('v0.2: the animal travels between its places along the game trails (Yuka A*
   assert.ok(onTrail > 0.8, `on-trail while travelling ${(onTrail * 100).toFixed(0)}%`);
 });
 
-test('v0.2: it uses at least four kinds of places and leaves activity events behind', () => {
+test('v0.2: it uses all five kinds of places and leaves activity events behind', () => {
   const kinds = new Set(); const ev = {};
   for (const seed of [1, 2, 3]) {
     const { log } = sim(900, seed);
     for (const k of [ST.REST, ST.FEED, ST.RUB, ST.BROWSE, ST.SIP]) if (log.states.has(k)) kinds.add(k);
     for (const [k, v] of Object.entries(log.events)) ev[k] = (ev[k] ?? 0) + v;
   }
-  assert.ok(kinds.size >= 4, [...kinds].join(','));
+  assert.ok(kinds.size === 5, `all five kinds of places used: ${[...kinds].join(',')}`);
   assert.ok(ev.feed > 0 && ev.sip > 0, JSON.stringify(ev));
 });
 

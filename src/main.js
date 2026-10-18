@@ -275,17 +275,26 @@ function drawSoundViz() {
 }
 
 // ---------- input ----------
-function start(mode) { game.mode = mode; audio.start(); player.controls.lock(); }
-$('start-explore').addEventListener('click', e => { e.stopPropagation(); start('explore'); });
-$('start-challenge').addEventListener('click', e => { e.stopPropagation(); start('challenge'); });
-$('resume').addEventListener('click', () => player.controls.lock());
-player.controls.addEventListener('lock', () => {
+function start(mode) {
+  game.mode = mode; audio.start();
+  // pointer lock can be refused (in-app/embedded browsers): fall back to drag-to-look
+  document.addEventListener('pointerlockerror', () => {
+    player.enableFallback(renderer.domElement); enterPlay();
+    toast('この環境ではマウスを固定できません：左ドラッグで見回し、WASD で歩けます。');
+  }, { once: true });
+  player.controls.lock();
+}
+function enterPlay() {
   $('start').classList.remove('show'); $('pause').classList.remove('show'); toggleNotebook(false);
   if (game.state === 'intro') {
     game.state = 'play';
     toast(game.mode === 'explore' ? '森を歩いてみよう。気になる痕跡を見つけたら F で観察、Tab でノート。' : '痕跡を探せ。E / 右クリックで推理スキャン（3 回）');
   }
-});
+}
+$('start-explore').addEventListener('click', e => { e.stopPropagation(); start('explore'); });
+$('start-challenge').addEventListener('click', e => { e.stopPropagation(); start('challenge'); });
+$('resume').addEventListener('click', () => { if (player.fallback === 'paused') { player.fallback = true; $('pause').classList.remove('show'); } else player.controls.lock(); });
+player.controls.addEventListener('lock', enterPlay);
 player.controls.addEventListener('unlock', () => {
   if (game.state === 'play' && !$('notebook').classList.contains('show')) $('pause').classList.add('show');
 });
@@ -294,6 +303,7 @@ addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
   if (e.code === 'Tab') { e.preventDefault(); if (game.state !== 'intro') toggleNotebook(); return; }
   if (e.code === 'KeyR' && game.state === 'over') { location.reload(); return; }
+  if (e.code === 'Escape' && player.fallback === true && game.state === 'play') { player.fallback = 'paused'; $('pause').classList.add('show'); return; }
   if (!player.locked) return;
   if (e.code === 'KeyF') observe();
   if (e.code === 'KeyE') scanFromCrosshair();

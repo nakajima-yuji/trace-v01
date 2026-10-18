@@ -75,6 +75,7 @@ class ActivityState extends State {
     if (a.timer <= 0) {
       if (this.kind === ST.REST) a.fatigue = 0;
       if (this.kind === ST.SIP) a.thirst = 0;
+      if (this.kind === ST.RUB) a.itch = 0;
       if (this.kind === ST.FEED || this.kind === ST.BROWSE) a.hunger = Math.max(0, a.hunger - 0.8);
       a.lastPlace = this.kind; a.fsm.changeTo(ST.WANDER);
     }
@@ -145,7 +146,7 @@ export class AnimalTruth {
     this.player = { x: 0, z: -100, mode: 'still' };
     this.faceTarget = null; this.drinking = false; this.sipTimer = 0;
     this.limit = o.limit ?? 14.3; // hard clamp (v0.1 map is ±15 m)
-    this.hunger = this.rand(0.2, 0.8); this.fatigue = this.rand(0.3, 0.9);
+    this.hunger = this.rand(0.2, 0.8); this.fatigue = this.rand(0.3, 0.9); this.itch = this.rand(0.2, 0.7);
     this.pending = []; this.lastDt = 0; this.goal = null; this.lastPlace = null;
 
     const em = this.em = new EntityManager();
@@ -219,7 +220,7 @@ export class AnimalTruth {
 
   /** Pick the next place by need (thirst → water, fatigue → bed, hunger → food) plus whim. */
   chooseNextPlace() {
-    const need = { sip: this.thirst, rest: this.fatigue, feed: this.hunger * 0.7, browse: this.hunger * 0.6, rub: 0.3 };
+    const need = { sip: this.thirst, rest: this.fatigue, feed: this.hunger * 0.7, browse: this.hunger * 0.6, rub: this.itch };
     let best = null, bs = -1;
     for (const p of this.places) {
       if (p.kind === this.lastPlace) continue;
@@ -269,7 +270,7 @@ export class AnimalTruth {
     const events = [];
     if (player) this.player = player;
     this.time += dt; this.timer -= dt; this.thirst += dt / 70; this.lastDt = dt;
-    this.hunger += dt / 90; this.fatigue += dt / 200;
+    this.hunger += dt / 90; this.fatigue += dt / 200; this.itch += dt / 160;
     const prevState = this.state;
 
     // perception → state (skipped while a test script drives the animal)

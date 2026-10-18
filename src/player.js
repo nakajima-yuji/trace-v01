@@ -10,7 +10,7 @@ export class Player {
     this.camera = camera; this.world = world;
     this.controls = new PointerLockControls(camera, dom);
     this.keys = new Set();
-    this.crouch = false; this.sprint = false; this.mode = 'still';
+    this.crouch = false; this.sprint = false; this.mode = 'still'; this.fallback = false;
     this.pos = new THREE.Vector3(spawn.x, 0, spawn.z);
     this.limit = (world.size ?? 30) / 2 - 0.4;
     this.vel = new THREE.Vector3();
@@ -23,7 +23,29 @@ export class Player {
     addEventListener('keyup', e => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
   }
-  get locked() { return this.controls.isLocked; }
+  get locked() { return this.controls.isLocked || this.fallback === true; }
+
+  /**
+   * When the browser refuses pointer lock (embedded/in-app browsers, some iframes),
+   * look around by dragging with the left mouse button instead; the keyboard works as usual.
+   */
+  enableFallback(dom) {
+    this.fallback = true;
+    if (this._dragBound) return;
+    this._dragBound = true;
+    const e = new THREE.Euler(0, 0, 0, 'YXZ');
+    let drag = false, lx = 0, ly = 0;
+    dom.addEventListener('mousedown', ev => { if (ev.button === 0) { drag = true; lx = ev.clientX; ly = ev.clientY; } });
+    addEventListener('mouseup', () => { drag = false; });
+    addEventListener('mousemove', ev => {
+      if (!drag || this.fallback !== true) return;
+      e.setFromQuaternion(this.camera.quaternion);
+      e.y -= (ev.clientX - lx) * 0.004; e.x -= (ev.clientY - ly) * 0.004;
+      e.x = Math.max(-1.5, Math.min(1.5, e.x));
+      this.camera.quaternion.setFromEuler(e);
+      lx = ev.clientX; ly = ev.clientY;
+    });
+  }
 
   /** Returns footstep positions produced this frame (for branch snaps / splashes). */
   update(dt) {

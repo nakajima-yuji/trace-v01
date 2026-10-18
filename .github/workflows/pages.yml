@@ -31,8 +31,8 @@ jobs:
       # v0.1 stays playable at /v01/, built untouched from its tag
       - name: Build v0.1 into site/v01
         run: |
-          git worktree add ../trace-v01 v0.1
-          cd ../trace-v01
+          git worktree add "$RUNNER_TEMP/trace-v01-src" v0.1
+          cd "$RUNNER_TEMP/trace-v01-src"
           npm ci
           node scripts/build-pages.mjs
           cp -r site "$GITHUB_WORKSPACE/site/v01"

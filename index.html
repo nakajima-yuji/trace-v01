@@ -51,6 +51,11 @@
   #prompt { position: fixed; left: 50%; top: calc(50% + 22px); transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,0.85);
     text-shadow: 0 1px 2px #000; opacity: 0; transition: opacity .25s; pointer-events: none; }
   #prompt.show { opacity: 1; }
+  #hint { position: fixed; left: 50%; bottom: 22%; transform: translateX(-50%); font-size: 15px; color: #fff;
+    text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,0,0.6); opacity: 0; transition: opacity .4s; pointer-events: none; white-space: nowrap; }
+  #hint.show { opacity: 0.92; }
+  .opt { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--dim); margin-top: 10px; cursor: pointer; }
+  .opt input { accent-color: #9fe0b8; }
   #toast { position: fixed; left: 50%; bottom: 10%; transform: translateX(-50%); background: var(--panel); max-width: calc(100vw - 32px);
     padding: 8px 16px; border-radius: 6px; font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; text-align: center; }
   #toast.show { opacity: 1; }
@@ -90,7 +95,8 @@
   <div>経過 <span id="clock">0:00</span></div>
 </div>
 <div id="crosshair"></div>
-<div id="prompt">F　観察する</div>
+<div id="prompt">クリックで観察</div>
+<div id="hint"></div>
 <canvas id="soundviz" width="360" height="360"></canvas>
 <div id="toast"></div>
 
@@ -102,14 +108,12 @@
       ぬかるんだ獣道、背の高い草むら、池のほとり。歩けば、あの動物がついさっき通った跡が見つかるはず。<br>
       足跡、倒れた草、波紋、食べ残し、寝床——<b>見つけたものは観察ノートに記録しよう。</b></p>
     <div class="keys">
-      <b>マウス / WASD</b><span>見回す・歩く（Shift で走る、C でしゃがむ）</span>
-      <b>F</b><span>照準の先を観察してノートに記録</span>
-      <b>Tab</b><span>観察ノートを開く / 閉じる</span>
-      <b>E</b><span>気配スキャン（自由探索では 20 秒に 1 回、当たると一瞬だけ姿が見える）</span>
-      <b>V</b><span>音の方向表示（字幕）の切替</span>
-      <b>Esc</b><span>一時停止</span>
+      <b>マウス</b><span>見回す・<b>クリックで観察</b>してノートに記録</span>
+      <b>WASD</b><span>歩く（足元を見下ろすと、近寄って見られる）</span>
+      <b>Tab</b><span>観察ノート</span>
     </div>
-    <p class="dim">ヘッドホン推奨。動物はあなたの足音を聞いている——静かに歩けば、痕跡はもっと新しくなる。</p>
+    <p class="dim">使いたい人だけ：Shift で走る（音で動物に気づかれる）・右クリックで気配スキャン・Esc で一時停止。ヘッドホン推奨。</p>
+    <label class="opt"><input type="checkbox" id="opt-captions"> 音の方向を字幕で表示する</label>
     <div class="modes">
       <button id="start-explore" class="primary"><b>自由探索</b><span>時間制限なし・終わりなし。森を歩いて痕跡を集める（おすすめ）</span></button>
       <button id="start-challenge"><b>推理チャレンジ</b><span>v0.1 のルール。3 回のスキャンで透明動物の居場所を当てる</span></button>
@@ -121,7 +125,7 @@
 <div id="pause" class="overlay">
   <div class="card" style="width:min(360px, calc(100vw - 32px)); text-align:center">
     <h2>一時停止</h2>
-    <p class="dim">Tab で観察ノート</p>
+    <p class="dim">マウス：見回す・クリックで観察　WASD：歩く　Tab：ノート</p>
     <div class="modes" style="grid-template-columns:1fr"><button id="resume" class="primary"><b>森に戻る</b><span>クリックで再開</span></button></div>
   </div>
 </div>

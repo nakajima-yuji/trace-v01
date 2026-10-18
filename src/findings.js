@@ -155,16 +155,22 @@ export class Findings {
     return best;
   }
 
-  /** F pressed: log a find, or whatever live trace is on the ground under the crosshair. */
-  observe(camera, now) {
+  /** What a click would observe right now: a find, or the live trace under the crosshair (or null). */
+  target(camera, now) {
     const k = this.candidate(camera);
-    if (k) return this.logFind(k, now);
+    if (k) return { find: k };
     const ray = new THREE.Raycaster(); ray.far = 4.5; ray.firstHitOnly = true;
     ray.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hit = this.world.pick(ray);
     if (!hit) return null;
-    const P = hit.point;
-    return this.logTrace(this.readGround(P.x, P.z, now), now);
+    const r = this.readGround(hit.point.x, hit.point.z, now);
+    return r ? { trace: r } : null;
+  }
+  /** Click: log a find, or whatever live trace is on the ground under the crosshair. */
+  observe(camera, now) {
+    const t = this.target(camera, now);
+    if (!t) return null;
+    return t.find ? this.logFind(t.find, now) : this.logTrace(t.trace, now);
   }
 
   logFind(k, now) {

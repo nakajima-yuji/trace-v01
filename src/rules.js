@@ -48,11 +48,13 @@ export class TrampleField {
     this.amount = new Float32Array(res * res);
     this.dx = new Float32Array(res * res);
     this.dz = new Float32Array(res * res);
+    // agitation: how hard the blades are still quivering after contact (decays in ~3 s)
+    this.agit = new Float32Array(res * res);
   }
   cell(x, z) {
     return [((x / this.size) + 0.5) * this.res, ((z / this.size) + 0.5) * this.res];
   }
-  stamp(x, z, radius, strength, dirX, dirZ) {
+  stamp(x, z, radius, strength, dirX, dirZ, agitate = true) {
     const [cx, cz] = this.cell(x, z);
     const rc = (radius / this.size) * this.res;
     const r = this.res;
@@ -63,6 +65,7 @@ export class TrampleField {
         if (d > 1) continue;
         const k = j * r + i;
         const s = strength * (1 - d * d);
+        if (agitate) this.agit[k] = Math.max(this.agit[k], Math.min(1, s * 1.3));
         if (s <= this.amount[k]) continue;
         // push: along motion, plus outward from the stamp centre
         let px = dirX + (ddx / (rc + 1e-6)) * 0.6, pz = dirZ + (ddz / (rc + 1e-6)) * 0.6;
@@ -75,6 +78,14 @@ export class TrampleField {
     const step = dt / this.recover;
     const a = this.amount;
     for (let k = 0; k < a.length; k++) if (a[k] > 0) a[k] = Math.max(0, a[k] - step);
+    const g = this.agit, ag = Math.exp(-dt / 1.2);
+    for (let k = 0; k < g.length; k++) if (g[k] > 0.004) g[k] *= ag; else g[k] = 0;
+  }
+  sampleAgitation(x, z) {
+    const [cx, cz] = this.cell(x, z);
+    const i = Math.floor(cx), j = Math.floor(cz);
+    if (i < 0 || j < 0 || i >= this.res || j >= this.res) return 0;
+    return this.agit[j * this.res + i];
   }
   sample(x, z) {
     const [cx, cz] = this.cell(x, z);
@@ -87,7 +98,7 @@ export class TrampleField {
       buf[k * 4] = this.amount[k] * 255;
       buf[k * 4 + 1] = (this.dx[k] * 0.5 + 0.5) * 255;
       buf[k * 4 + 2] = (this.dz[k] * 0.5 + 0.5) * 255;
-      buf[k * 4 + 3] = 255;
+      buf[k * 4 + 3] = this.agit[k] * 255;
     }
   }
 }

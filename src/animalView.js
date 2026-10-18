@@ -18,24 +18,43 @@ export class AnimalView {
     this.walk = this.mixer.clipAction(clip('Walk')); this.graze = this.mixer.clipAction(clip('Graze'));
     this.walk.play(); this.graze.play();
     this.walk.timeScale = 0; this.graze.timeScale = 0;
+    // v0.2 clips (absent in the v0.1 GLB): lying in the bed, rubbing a trunk
+    this.rest = clip('Rest') && this.mixer.clipAction(clip('Rest'));
+    this.rub = clip('Rub') && this.mixer.clipAction(clip('Rub'));
+    for (const a of [this.rest, this.rub]) if (a) { a.play(); a.setEffectiveWeight(0); }
     this.walkDur = clip('Walk').duration; this.grazeDur = clip('Graze').duration;
-    this.root.visible = debug; this.revealT = -1;
+    this.root.visible = debug; this.revealT = -1; this.glimpseT = -1; this.debug = debug;
   }
   update(dt, truth, y) {
     this.root.position.set(truth.x, y, truth.z);
     this.root.rotation.y = truth.heading;
     const s = truth.speed, w = Math.min(1, Math.max(0, (s - 0.05) / 0.3));
     this.walk.time = ((truth.phase % 1) + 1) % 1 * this.walkDur;
-    const lowered = truth.state === 'graze' || truth.drinking;
+    const st = truth.state;
+    const lowered = st === 'graze' || st === 'feed' || st === 'browse' || truth.drinking;
     this.graze.timeScale = lowered ? 1 : 0;
     if (!lowered) this.graze.time = 0;
-    this.walk.setEffectiveWeight(w); this.graze.setEffectiveWeight(1 - w);
+    const resting = this.rest && st === 'rest' ? 1 : 0, rubbing = this.rub && st === 'rub' ? 1 : 0;
+    const idle = (1 - w) * (1 - resting) * (1 - rubbing);
+    this.walk.setEffectiveWeight(w); this.graze.setEffectiveWeight(idle);
+    this.rest?.setEffectiveWeight(resting); this.rub?.setEffectiveWeight(rubbing);
     this.mixer.update(dt);
+    if (this.glimpseT >= 0) {
+      this.glimpseT += dt;
+      const t = this.glimpseT / this.glimpseDur;
+      this.glass.opacity = Math.max(0, Math.sin(Math.min(1, t) * Math.PI)) * 0.9;
+      this.glass.emissiveIntensity = 0.25 * this.glass.opacity;
+      if (t >= 1) { this.glimpseT = -1; this.root.visible = this.debug; }
+    }
     if (this.revealT >= 0) {
       this.revealT += dt;
       const k = Math.min(1, this.revealT / 1.5);
       this.glass.opacity = k; this.glass.emissiveIntensity = 0.6 * (1 - k) + 0.08;
     }
   }
-  reveal() { this.root.visible = true; this.revealT = 0; }
+  reveal() { this.root.visible = true; this.revealT = 0; this.glimpseT = -1; }
+  /** Free-explore scan hit: the glass body shimmers into view for a few seconds, then fades. */
+  glimpse(seconds = 4) {
+    this.root.visible = true; this.revealT = -1; this.glimpseT = 0; this.glimpseDur = seconds;
+  }
 }

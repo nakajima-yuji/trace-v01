@@ -6,12 +6,13 @@ const EYE = { stand: 1.62, crouch: 0.95 };
 const SPEED = { walk: 2.3, sprint: 4.6, crouch: 1.1 };
 
 export class Player {
-  constructor(camera, dom, world) {
+  constructor(camera, dom, world, { spawn = world.spawn ?? { x: 0, z: 12.5 } } = {}) {
     this.camera = camera; this.world = world;
     this.controls = new PointerLockControls(camera, dom);
     this.keys = new Set();
     this.crouch = false; this.sprint = false; this.mode = 'still';
-    this.pos = new THREE.Vector3(0, 0, 12.5);
+    this.pos = new THREE.Vector3(spawn.x, 0, spawn.z);
+    this.limit = (world.size ?? 30) / 2 - 0.4;
     this.vel = new THREE.Vector3();
     this.eye = EYE.stand; this.stepAcc = 0; this.bob = 0;
     camera.position.set(this.pos.x, world.heightAt(this.pos.x, this.pos.z) + this.eye, this.pos.z);
@@ -46,8 +47,8 @@ export class Player {
       const dx = this.pos.x - ob.x, dz = this.pos.z - ob.z, d = Math.hypot(dx, dz), min = ob.r + 0.3;
       if (d < min && d > 1e-6) { this.pos.x = ob.x + dx / d * min; this.pos.z = ob.z + dz / d * min; }
     }
-    this.pos.x = Math.max(-14.6, Math.min(14.6, this.pos.x));
-    this.pos.z = Math.max(-14.6, Math.min(14.6, this.pos.z));
+    this.pos.x = Math.max(-this.limit, Math.min(this.limit, this.pos.x));
+    this.pos.z = Math.max(-this.limit, Math.min(this.limit, this.pos.z));
 
     const moved = Math.hypot(this.pos.x - ox, this.pos.z - oz);
     this.stepAcc += moved;

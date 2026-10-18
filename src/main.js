@@ -224,13 +224,13 @@ function renderNotebook() {
       ${e.fresh ? `<p class="nb-fresh">${e.fresh}</p>` : ''}
       ${e.hint ? `<p class="nb-hint">${e.hint}</p>` : ''}
     </li>`).join('');
-  $('nb-list').innerHTML = list || '<li class="empty">まだ何も記録していない。足元をよく見て、気になったら F。</li>';
+  $('nb-list').innerHTML = list || '<li class="empty">まだ何も記録していない。足元をよく見て、気になったらクリック。</li>';
 }
 function toggleNotebook(force) {
   const el = $('notebook');
   const show = force ?? !el.classList.contains('show');
   el.classList.toggle('show', show);
-  if (show) renderNotebook();
+  if (show) { renderNotebook(); hints.done.add('notebook'); }
 }
 
 // ---------- HUD ----------
@@ -248,8 +248,36 @@ function updateHud() {
   $('prompt').classList.toggle('show', !!cand);
 }
 
+// ---------- contextual hints: one short line, only when it's needed ----------
+const hints = { done: new Set(), walked: 0, check: 0, notebookT: 0 };
+function hint(msg) { $('hint').textContent = msg; $('hint').classList.toggle('show', !!msg); }
+function updateHints(dt) {
+  if (game.state !== 'play' || !player.locked) { hint(''); return; }
+  const look = player.fallback === true ? 'ドラッグで見回す' : 'マウスで見回す';
+  if (!hints.done.has('move')) {
+    hint(`WASD で歩く・${look}`);
+    hints.walked += Math.hypot(player.vel.x, player.vel.z) * dt;
+    if (hints.walked > 4) hints.done.add('move');
+    return;
+  }
+  if (!hints.done.has('observe')) {
+    if (findings.entries.length) { hints.done.add('observe'); return; }
+    // only while something observable is actually under the crosshair
+    // a find already shows the small prompt by the crosshair; the hint covers ground traces
+    if ((hints.check -= dt) <= 0) { hints.check = 0.4; hints.target = !!findings.target(camera, game.t)?.trace; }
+    hint(hints.target ? (player.fallback === true ? 'クリック（ドラッグせずに）で観察' : 'クリックで観察') : '');
+    return;
+  }
+  if (!hints.done.has('notebook')) {
+    hint('Tab で観察ノートを開ける');
+    if ((hints.notebookT += dt) > 10) hints.done.add('notebook');
+    return;
+  }
+  hint('');
+}
+
 // optional sound-direction captions (accessibility), toggled with V
-const soundViz = { on: params.has('captions'), items: [] };
+const soundViz = { on: params.has('captions'), items: [] }; // toggled on the start screen
 const CAPTION = { crack: '枝が折れる音', squelch: '泥を踏む音', splash: '水を踏む音', rustle: '葉擦れ', step: '足音', tap: '石を蹴る音', sip: '水を舐める音', rub: '幹をこする音', crunch: '殻を噛む音', twig: '小枝を噛み切る音' };
 audio.listeners.push((kind, x, y, z) => {
   const d = Math.hypot(x - camera.position.x, z - camera.position.z);
@@ -277,10 +305,11 @@ function drawSoundViz() {
 // ---------- input ----------
 function start(mode) {
   game.mode = mode; audio.start();
+  soundViz.on = $('opt-captions').checked;
   // pointer lock can be refused (in-app/embedded browsers): fall back to drag-to-look
   document.addEventListener('pointerlockerror', () => {
     player.enableFallback(renderer.domElement); enterPlay();
-    toast('この環境ではマウスを固定できません：左ドラッグで見回し、WASD で歩けます。');
+    toast('この環境ではマウスを固定できないので、ドラッグで見回せるようにしました。');
   }, { once: true });
   player.controls.lock();
 }
@@ -288,7 +317,7 @@ function enterPlay() {
   $('start').classList.remove('show'); $('pause').classList.remove('show'); toggleNotebook(false);
   if (game.state === 'intro') {
     game.state = 'play';
-    toast(game.mode === 'explore' ? '森を歩いてみよう。気になる痕跡を見つけたら F で観察、Tab でノート。' : '痕跡を探せ。E / 右クリックで推理スキャン（3 回）');
+    if (game.mode === 'challenge') toast('痕跡を探せ。右クリックで推理スキャン（3 回）');
   }
 }
 $('start-explore').addEventListener('click', e => { e.stopPropagation(); start('explore'); });
@@ -298,16 +327,21 @@ player.controls.addEventListener('lock', enterPlay);
 player.controls.addEventListener('unlock', () => {
   if (game.state === 'play' && !$('notebook').classList.contains('show')) $('pause').classList.add('show');
 });
-addEventListener('mousedown', e => { if (e.button === 2 && player.locked && game.mode === 'challenge') scanFromCrosshair(); });
+// the whole game on the mouse: left click = observe, right click = scan (optional)
+addEventListener('mousedown', e => {
+  if (game.state !== 'play') return;
+  if (e.button === 0 && player.controls.isLocked) observe();
+  if (e.button === 2 && player.locked) scanFromCrosshair();
+});
+player.onTap = () => { if (game.state === 'play') observe(); };
 addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('keydown', e => {
   if (e.code === 'Tab') { e.preventDefault(); if (game.state !== 'intro') toggleNotebook(); return; }
   if (e.code === 'KeyR' && game.state === 'over') { location.reload(); return; }
   if (e.code === 'Escape' && player.fallback === true && game.state === 'play') { player.fallback = 'paused'; $('pause').classList.add('show'); return; }
   if (!player.locked) return;
-  if (e.code === 'KeyF') observe();
+  if (e.code === 'KeyF') observe();          // kept as quiet aliases for players used to v0.2
   if (e.code === 'KeyE') scanFromCrosshair();
-  if (e.code === 'KeyV') { soundViz.on = !soundViz.on; toast(soundViz.on ? '音の方向表示 ON' : '音の方向表示 OFF'); }
 });
 
 // ---------- loop ----------
@@ -336,7 +370,7 @@ function frame() {
   audio.setListener(camera);
   if ((toastTimer -= dt) <= 0) $('toast').classList.remove('show');
   for (const it of soundViz.items) it.t += dt;
-  drawSoundViz(); updateHud();
+  drawSoundViz(); updateHud(); updateHints(dt);
   if (DEBUG) $('debug').textContent = `truth x=${truth.x.toFixed(2)} z=${truth.z.toFixed(2)} state=${truth.state} speed=${truth.speed.toFixed(2)}\ngoal=${truth.goal?.kind ?? '-'} route=${(truth.route ?? []).join('>')}\nfps ${fps} grass ${grass.count} prints ${prints.total}`;
   fpsAcc += dt; fpsN++; if (fpsAcc > 1) { fps = Math.round(fpsN / fpsAcc); fpsAcc = 0; fpsN = 0; }
   if (++frameNo % 3 === 0) renderer.shadowMap.needsUpdate = true;
@@ -349,7 +383,7 @@ const TRACE = window.TRACE = {
   THREE, scene, camera, renderer, world, truth, trample, water, prints, props, stats, game, player, grass, animalView, findings,
   paused: false, seed: SEED,
   get fps() { return fps; },
-  simulate, applyEvents, scanAt, finish, observe, renderNotebook, toggleNotebook,
+  simulate, applyEvents, scanAt, finish, observe, renderNotebook, toggleNotebook, hints, updateHints,
   begin(mode = 'explore') { game.mode = mode; game.state = 'play'; $('start').classList.remove('show'); },
   fastForward(seconds, dt = 1 / 30, playerInfo = player.info()) {
     for (let s = 0; s < seconds; s += dt) {

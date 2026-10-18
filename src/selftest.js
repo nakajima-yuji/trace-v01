@@ -27,6 +27,33 @@ export async function runSelfTest(T) {
     T.lookAt(p.x, p.y + yOff, p.z, x, world.heightAt(x, z) + 1.0, z);
   }
 
+  // 0. simplified controls: one hint at a time, click to observe, look down to lean in
+  {
+    T.player.enableFallback(T.renderer.domElement); // the pane refuses pointer lock: drag-to-look path
+    const hintText = () => document.getElementById('hint').classList.contains('show') ? document.getElementById('hint').textContent : '';
+    T.updateHints(0.1);
+    const h1 = hintText();
+    T.hints.walked = 5; T.updateHints(0.1);
+    const bed = findings.spots.Bed;
+    lookFrom(bed, 0.05); T.hints.check = 0; T.updateHints(0.1);
+    const h2 = document.getElementById('prompt').classList.contains('show') || T.findings.candidate(T.camera) ? 'クリックで観察（照準の横）' : hintText();
+    const c = T.renderer.domElement, r = c.getBoundingClientRect(), at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true };
+    c.dispatchEvent(new MouseEvent('mousedown', { ...at, button: 0 }));
+    window.dispatchEvent(new MouseEvent('mouseup', { ...at, button: 0 }));
+    const clicked = findings.found.has('Bed');
+    T.updateHints(0.1); T.updateHints(0.1);
+    const h3 = hintText();
+    ok('操作のヒントは必要なときに 1 つずつ', h1.includes('WASD') && h2.includes('クリック') && h3.includes('Tab'), `「${h1}」→「${h2}」→「${h3}」`);
+    ok('クリックで観察してノートに記録できる', clicked, clicked ? '寝床を記録' : '記録されない');
+    const p = T.player, fov0 = T.camera.fov;
+    T.camera.lookAt(T.camera.position.x, T.camera.position.y - 5, T.camera.position.z - 0.5);
+    for (let i = 0; i < 20; i++) p.update(0.1);
+    const fov1 = T.camera.fov;
+    T.camera.lookAt(T.camera.position.x, T.camera.position.y, T.camera.position.z - 5);
+    for (let i = 0; i < 20; i++) p.update(0.1);
+    ok('足元を見下ろすと近寄って見える（しゃがみキー不要）', fov1 < 58 && T.camera.fov > 70, `視野 ${fov0.toFixed(0)}° → 見下ろし ${fov1.toFixed(0)}° → 前方 ${T.camera.fov.toFixed(0)}°`);
+    T.toggleNotebook(false);
+  }
   ok('3 つの探索エリア', world.zones.length === 3, world.zones.map(z => z.label).join(' / '));
   ok('発見対象が 6 つある', Object.keys(world.finds).length === 6, Object.keys(world.finds).join(', '));
   ok('獣道のグラフ', world.trails.length >= 12 && world.pois.length === 5, `ノード ${world.trails.length}・場所 ${world.pois.length}`);

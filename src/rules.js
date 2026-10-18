@@ -35,7 +35,8 @@ export function judgeScan(mx, mz, tx, tz) {
 
 /** How far the animal can hear the player, by player movement mode. */
 export function hearingRadius(mode) {
-  return { still: 2.5, crouch: 4, walk: 8, sprint: 15 }[mode] ?? 8;
+  // v0.2.1: normal walking is the quiet way to move (crouch was removed from the controls)
+  return { still: 2.5, crouch: 4, walk: 5, sprint: 15 }[mode] ?? 5;
 }
 
 /**

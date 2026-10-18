@@ -57,3 +57,12 @@ test('ripple field: disturbance propagates outward and damps', () => {
   for (let i = 0; i < 600; i++) r.step();
   assert.ok(r.energy() < e0 * 0.05, 'energy damped');
 });
+
+test('trample field: fresh contact quivers briefly (spring recovery), then only the bend remains', () => {
+  const t = new TrampleField(40, 160, 90);
+  t.stamp(0, 0, 0.4, 0.8, 1, 0);
+  assert.ok(t.sampleAgitation(0, 0) > 0.7);
+  t.decay(6);
+  assert.ok(t.sampleAgitation(0, 0) < 0.02, 'quiver gone after 6 s');
+  assert.ok(t.sample(0, 0) > 0.55, 'bend still there');
+});

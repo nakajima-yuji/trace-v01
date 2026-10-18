@@ -17,6 +17,8 @@ export class Audio3D {
     const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
     const g = this.ctx.createGain(); g.gain.value = 0.035;
     amb.connect(f).connect(g).connect(this.master); amb.start();
+    for (const a of this.pendingAmbient ?? []) this.ambient(...a);
+    this.pendingAmbient = [];
   }
 
   setListener(camera) {
@@ -42,7 +44,45 @@ export class Audio3D {
     step: ['lowpass', 260, 1.0, 0.07, 0.55, 0],
     tap: ['bandpass', 2200, 3.0, 0.03, 0.6, 0],
     sip: ['bandpass', 1100, 6.0, 0.06, 0.5, 0],
+    // v0.2 activity sounds
+    rub: ['bandpass', 520, 1.5, 0.42, 0.9, 0],
+    crunch: ['highpass', 2400, 1.0, 0.04, 1.1, 0.06],
+    twig: ['highpass', 1800, 1.2, 0.035, 1.2, 0],
   };
+
+  /** Positional ambience that pulls the player toward places: a pond, a meadow full of birds. */
+  ambient(kind, x, y, z) {
+    if (!this.ctx) { (this.pendingAmbient ??= []).push([kind, x, y, z]); return; }
+    const ctx = this.ctx;
+    const pan = ctx.createPanner();
+    pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse'; pan.refDistance = 3; pan.rolloffFactor = 1.1;
+    if (pan.positionX) { pan.positionX.value = x; pan.positionY.value = y; pan.positionZ.value = z; } else pan.setPosition(x, y, z);
+    pan.connect(this.master);
+    if (kind === 'pond') {
+      const src = ctx.createBufferSource(); src.buffer = this.noise; src.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 380; f.Q.value = 0.7;
+      const g = ctx.createGain(); g.gain.value = 0.05;
+      const lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.frequency.value = 0.35; lg.gain.value = 0.03;
+      lfo.connect(lg).connect(g.gain); lfo.start();
+      src.connect(f).connect(g).connect(pan); src.start();
+    }
+    const chirp = () => {
+      const t = ctx.currentTime, o = ctx.createOscillator(), g = ctx.createGain();
+      if (kind === 'pond') { // frog: low pulsing croak
+        o.type = 'square'; o.frequency.setValueAtTime(140 + Math.random() * 40, t);
+        g.gain.setValueAtTime(0.0001, t);
+        for (let i = 0; i < 3; i++) { g.gain.exponentialRampToValueAtTime(0.06, t + i * 0.09 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.09 + 0.07); }
+      } else { // bird: quick falling whistle
+        o.type = 'sine'; const f0 = 2600 + Math.random() * 1400;
+        o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 0.6, t + 0.12);
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.05, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+      }
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = kind === 'pond' ? 900 : 6000;
+      o.connect(lp).connect(g).connect(pan); o.start(t); o.stop(t + 0.4);
+      setTimeout(chirp, (kind === 'pond' ? 2500 : 1200) + Math.random() * 4000);
+    };
+    setTimeout(chirp, Math.random() * 2000);
+  }
 
   play(kind, x, y, z) {
     for (const l of this.listeners) l(kind, x, y, z);

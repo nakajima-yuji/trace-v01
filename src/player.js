@@ -6,12 +6,13 @@ const EYE = { stand: 1.62, crouch: 0.95 };
 const SPEED = { walk: 2.3, sprint: 4.6, crouch: 1.1 };
 
 export class Player {
-  constructor(camera, dom, world) {
+  constructor(camera, dom, world, { spawn = world.spawn ?? { x: 0, z: 12.5 } } = {}) {
     this.camera = camera; this.world = world;
     this.controls = new PointerLockControls(camera, dom);
     this.keys = new Set();
-    this.crouch = false; this.sprint = false; this.mode = 'still';
-    this.pos = new THREE.Vector3(0, 0, 12.5);
+    this.crouch = false; this.sprint = false; this.mode = 'still'; this.fallback = false;
+    this.pos = new THREE.Vector3(spawn.x, 0, spawn.z);
+    this.limit = (world.size ?? 30) / 2 - 0.4;
     this.vel = new THREE.Vector3();
     this.eye = EYE.stand; this.stepAcc = 0; this.bob = 0;
     camera.position.set(this.pos.x, world.heightAt(this.pos.x, this.pos.z) + this.eye, this.pos.z);
@@ -22,7 +23,29 @@ export class Player {
     addEventListener('keyup', e => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
   }
-  get locked() { return this.controls.isLocked; }
+  get locked() { return this.controls.isLocked || this.fallback === true; }
+
+  /**
+   * When the browser refuses pointer lock (embedded/in-app browsers, some iframes),
+   * look around by dragging with the left mouse button instead; the keyboard works as usual.
+   */
+  enableFallback(dom) {
+    this.fallback = true;
+    if (this._dragBound) return;
+    this._dragBound = true;
+    const e = new THREE.Euler(0, 0, 0, 'YXZ');
+    let drag = false, lx = 0, ly = 0;
+    dom.addEventListener('mousedown', ev => { if (ev.button === 0) { drag = true; lx = ev.clientX; ly = ev.clientY; } });
+    addEventListener('mouseup', () => { drag = false; });
+    addEventListener('mousemove', ev => {
+      if (!drag || this.fallback !== true) return;
+      e.setFromQuaternion(this.camera.quaternion);
+      e.y -= (ev.clientX - lx) * 0.004; e.x -= (ev.clientY - ly) * 0.004;
+      e.x = Math.max(-1.5, Math.min(1.5, e.x));
+      this.camera.quaternion.setFromEuler(e);
+      lx = ev.clientX; ly = ev.clientY;
+    });
+  }
 
   /** Returns footstep positions produced this frame (for branch snaps / splashes). */
   update(dt) {
@@ -46,8 +69,8 @@ export class Player {
       const dx = this.pos.x - ob.x, dz = this.pos.z - ob.z, d = Math.hypot(dx, dz), min = ob.r + 0.3;
       if (d < min && d > 1e-6) { this.pos.x = ob.x + dx / d * min; this.pos.z = ob.z + dz / d * min; }
     }
-    this.pos.x = Math.max(-14.6, Math.min(14.6, this.pos.x));
-    this.pos.z = Math.max(-14.6, Math.min(14.6, this.pos.z));
+    this.pos.x = Math.max(-this.limit, Math.min(this.limit, this.pos.x));
+    this.pos.z = Math.max(-this.limit, Math.min(this.limit, this.pos.z));
 
     const moved = Math.hypot(this.pos.x - ox, this.pos.z - oz);
     this.stepAcc += moved;

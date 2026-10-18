@@ -42,7 +42,7 @@ export class Footprints {
     this._m.compose(pos, this._q, new THREE.Vector3(s, sy, s));
     this.mesh.setMatrixAt(i, this._m);
     this.mesh.instanceMatrix.needsUpdate = true;
-    this.records[i] = { age: 0, life: rule.life, base: rule.opacity, x: point.x, z: point.z };
+    this.records[i] = { age: 0, life: rule.life, base: rule.opacity, x: point.x, z: point.z, heading, surface: rule.surface };
     this.mesh.count = Math.min(this.max, Math.max(this.mesh.count, i + 1));
   }
   update(dt) {

@@ -4,13 +4,25 @@
 import {
   EntityManager, Vehicle, GameEntity, Vector3, SteeringBehavior,
   WanderBehavior, ObstacleAvoidanceBehavior, ArriveBehavior, FleeBehavior,
-  StateMachine, State,
+  StateMachine, State, Graph, NavNode, NavEdge, AStar, Path, FollowPathBehavior, OnPathBehavior,
 } from 'yuka';
 import { STRIDE, LEGS, footfallsBetween, footWorld, localToWorld } from './gait.js';
 import { hearingRadius } from './rules.js';
 
-export const ST = { WANDER: 'wander', GRAZE: 'graze', DRINK: 'drink', ALERT: 'alert', FLEE: 'flee' };
-const SPEED = { wander: 0.75, drink: 0.6, flee: 3.0 };
+export const ST = {
+  WANDER: 'wander', GRAZE: 'graze', DRINK: 'drink', ALERT: 'alert', FLEE: 'flee',
+  // v0.2 trail life: travel along game trails between places it uses, then do something there
+  TRAVEL: 'travel', REST: 'rest', FEED: 'feed', RUB: 'rub', BROWSE: 'browse', SIP: 'sip',
+};
+const SPEED = { wander: 0.75, drink: 0.6, flee: 3.0, travel: 0.7 };
+/** How long each activity lasts (s) and how often it leaves an event behind. */
+const ACT = {
+  rest: { dur: [25, 45], every: 0 },
+  feed: { dur: [8, 14], every: 2.4, event: 'feed' },
+  rub: { dur: [5, 8], every: 1.1, event: 'rub' },
+  browse: { dur: [6, 10], every: 2.0, event: 'browse' },
+  sip: { dur: [5, 8], every: 0 }, // drinking reuses the sip events in update()
+};
 
 /** Soft square fence: steer back toward the centre once outside `limit`. */
 class StayInBounds extends SteeringBehavior {
@@ -28,11 +40,47 @@ class StayInBounds extends SteeringBehavior {
 }
 
 class WanderState extends State {
-  enter(a) { a.setMode('wander'); a.timer = a.rand(8, 16); }
+  enter(a) { a.setMode('wander'); a.timer = a.graph ? a.rand(5, 10) : a.rand(8, 16); }
   execute(a) {
     if (a.timer > 0) return;
+    if (a.graph) { a.chooseNextPlace(); a.fsm.changeTo(ST.TRAVEL); return; }
     a.fsm.changeTo(a.thirst >= 1 && a.puddles.length ? ST.DRINK : ST.GRAZE);
   }
+}
+/** Walk the trail network (Yuka A* over the trail graph) to the chosen place. */
+class TravelState extends State {
+  enter(a) { a.planRoute(a.goal); a.setMode('travel'); a.timer = 120; }
+  execute(a) {
+    const g = a.goal;
+    if (a.path.finished() && Math.hypot(g.x - a.x, g.z - a.z) < 0.45) { a.fsm.changeTo(g.kind); return; }
+    if (a.timer <= 0) a.fsm.changeTo(ST.WANDER);
+  }
+}
+/** Doing something at a place: lying in the bed, eating nuts, rubbing a trunk, browsing, drinking. */
+class ActivityState extends State {
+  constructor(kind) { super(); this.kind = kind; }
+  enter(a) {
+    const c = ACT[this.kind];
+    a.setMode('stop'); a.timer = a.rand(...c.dur); a.actTimer = c.every * 0.5;
+    a.faceTarget = a.goal?.face ?? null;
+    if (this.kind === ST.SIP) { a.drinking = true; a.sipTimer = 0.4; }
+  }
+  execute(a) {
+    const c = ACT[this.kind];
+    if (c.every && (a.actTimer -= a.lastDt) <= 0) {
+      a.actTimer = c.every * a.rand(0.8, 1.2);
+      const m = localToWorld(0, 0.8, a.x, a.z, a.heading);
+      a.pending.push({ type: c.event, x: m.x, z: m.z, t: a.time });
+    }
+    if (a.timer <= 0) {
+      if (this.kind === ST.REST) a.fatigue = 0;
+      if (this.kind === ST.SIP) a.thirst = 0;
+      if (this.kind === ST.RUB) a.itch = 0;
+      if (this.kind === ST.FEED || this.kind === ST.BROWSE) a.hunger = Math.max(0, a.hunger - 0.8);
+      a.lastPlace = this.kind; a.fsm.changeTo(ST.WANDER);
+    }
+  }
+  exit(a) { a.faceTarget = null; a.drinking = false; }
 }
 class GrazeState extends State {
   enter(a) { a.setMode('stop'); a.timer = a.rand(5, 9); }
@@ -97,6 +145,9 @@ export class AnimalTruth {
     this.phase = 0; this.heading = this.rand(0, Math.PI * 2);
     this.player = { x: 0, z: -100, mode: 'still' };
     this.faceTarget = null; this.drinking = false; this.sipTimer = 0;
+    this.limit = o.limit ?? 14.3; // hard clamp (v0.1 map is ±15 m)
+    this.hunger = this.rand(0.2, 0.8); this.fatigue = this.rand(0.3, 0.9); this.itch = this.rand(0.2, 0.7);
+    this.pending = []; this.lastDt = 0; this.goal = null; this.lastPlace = null;
 
     const em = this.em = new EntityManager();
     const v = this.vehicle = new Vehicle();
@@ -118,12 +169,29 @@ export class AnimalTruth {
       flee: new FleeBehavior(this.fleeTarget, 20),
     };
     this.b.avoid.weight = 3; this.b.avoid.dBoxMinLength = 2.5; this.b.bounds.weight = 2;
+    // v0.2: trail graph → Yuka Graph + AStar → Path for FollowPath/OnPath (keeps to the game trail)
+    this.graph = null; this.path = new Path();
+    this.places = o.pois ?? [];
+    if (o.trails?.length) {
+      const g = this.graph = new Graph();
+      this.trailIds = o.trails.map(t => t.id);
+      o.trails.forEach((t, i) => g.addNode(new NavNode(i, new Vector3(t.x, 0, t.z), { id: t.id })));
+      o.trails.forEach((t, i) => t.links.forEach(l => {
+        const j = this.trailIds.indexOf(l);
+        if (j > i) g.addEdge(new NavEdge(i, j, Math.hypot(o.trails[j].x - t.x, o.trails[j].z - t.z)));
+      }));
+      this.b.follow = new FollowPathBehavior(this.path, 0.8);
+      this.b.onPath = new OnPathBehavior(this.path, 0.35, 1);
+      this.b.onPath.weight = 0.6;
+    }
     for (const k in this.b) v.steering.add(this.b[k]);
 
     this.fsm = new StateMachine(this);
     this.fsm.add(ST.WANDER, new WanderState()); this.fsm.add(ST.GRAZE, new GrazeState());
     this.fsm.add(ST.DRINK, new DrinkState()); this.fsm.add(ST.ALERT, new AlertState());
     this.fsm.add(ST.FLEE, new FleeState());
+    this.fsm.add(ST.TRAVEL, new TravelState());
+    for (const k of [ST.REST, ST.FEED, ST.RUB, ST.BROWSE, ST.SIP]) this.fsm.add(k, new ActivityState(k));
     this.fsm.changeTo(ST.WANDER);
   }
 
@@ -147,6 +215,37 @@ export class AnimalTruth {
     if (mode === 'wander') { b.wander.active = true; v.maxSpeed = SPEED.wander; v.maxForce = 2.5; }
     if (mode === 'drink') { b.arrive.active = true; v.maxSpeed = SPEED.drink; v.maxForce = 2.5; }
     if (mode === 'flee') { b.flee.active = true; v.maxSpeed = SPEED.flee; v.maxForce = 8; }
+    if (mode === 'travel') { b.follow.active = b.onPath.active = true; v.maxSpeed = SPEED.travel; v.maxForce = 2.5; }
+  }
+
+  /** Pick the next place by need (thirst → water, fatigue → bed, hunger → food) plus whim. */
+  chooseNextPlace() {
+    const need = { sip: this.thirst, rest: this.fatigue, feed: this.hunger * 0.7, browse: this.hunger * 0.6, rub: this.itch };
+    let best = null, bs = -1;
+    for (const p of this.places) {
+      if (p.kind === this.lastPlace) continue;
+      const s = (need[p.kind] ?? 0.2) + this.rand(0, 0.5);
+      if (s > bs) { bs = s; best = p; }
+    }
+    this.goal = best;
+  }
+  nearestNode(x, z) {
+    let bi = 0, bd = Infinity;
+    for (const n of this.graph.getNodes([])) {
+      const d = Math.hypot(n.position.x - x, n.position.z - z);
+      if (d < bd) { bd = d; bi = n.index; }
+    }
+    return bi;
+  }
+  /** A* from the nearest trail node to the goal's node, then on to the spot itself. */
+  planRoute(goal) {
+    const from = this.nearestNode(this.x, this.z), to = this.trailIds.indexOf(goal.node);
+    const astar = new AStar(this.graph, from, to); astar.search();
+    const ids = astar.found ? astar.getPath() : [from];
+    this.path.clear();
+    for (const i of ids) { const n = this.graph.getNode(i); this.path.add(new Vector3(n.position.x, 0, n.position.z)); }
+    this.path.add(new Vector3(goal.x, 0, goal.z));
+    this.route = ids.map(i => this.trailIds[i]);
   }
 
   /** Test hook: walk straight-ish to (x, z) at `speed`, ignoring the FSM until release(). */
@@ -170,14 +269,15 @@ export class AnimalTruth {
   update(dt, player) {
     const events = [];
     if (player) this.player = player;
-    this.time += dt; this.timer -= dt; this.thirst += dt / 70;
+    this.time += dt; this.timer -= dt; this.thirst += dt / 70; this.lastDt = dt;
+    this.hunger += dt / 90; this.fatigue += dt / 200; this.itch += dt / 160;
     const prevState = this.state;
 
     // perception → state (skipped while a test script drives the animal)
     if (!this.scripted) {
       const d = this.playerDist(), st = this.state;
       if (st !== ST.FLEE && d < 3.0) this.fsm.changeTo(ST.FLEE);
-      else if ((st === ST.WANDER || st === ST.GRAZE || st === ST.DRINK) && d < hearingRadius(this.player.mode)) this.fsm.changeTo(ST.ALERT);
+      else if (st !== ST.FLEE && st !== ST.ALERT && d < hearingRadius(this.player.mode)) this.fsm.changeTo(ST.ALERT);
       this.fsm.update();
     }
 
@@ -192,8 +292,8 @@ export class AnimalTruth {
       const dx = v.position.x - ob.x, dz = v.position.z - ob.z, dd = Math.hypot(dx, dz), min = ob.r + 0.25;
       if (dd < min && dd > 1e-6) { v.position.x = ob.x + dx / dd * min; v.position.z = ob.z + dz / dd * min; }
     }
-    v.position.x = Math.max(-14.3, Math.min(14.3, v.position.x));
-    v.position.z = Math.max(-14.3, Math.min(14.3, v.position.z));
+    v.position.x = Math.max(-this.limit, Math.min(this.limit, v.position.x));
+    v.position.z = Math.max(-this.limit, Math.min(this.limit, v.position.z));
 
     // heading follows velocity (or a face target while standing)
     const spd = this.speed;
@@ -222,6 +322,7 @@ export class AnimalTruth {
         events.push({ type: 'sip', x: m.x, z: m.z, t: this.time });
       }
     }
+    if (this.pending.length) { events.push(...this.pending); this.pending.length = 0; }
     const now = this.state;
     if (now !== prevState) events.push({ type: 'state', from: prevState, to: now, t: this.time });
     return events;

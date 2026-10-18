@@ -55,9 +55,9 @@ export class Water {
       return { p, field, tex, size, acc: 0, quiet: 0 };
     });
   }
-  /** Which puddle (if any) covers (x, z). */
+  /** Which puddle/pond (if any) covers (x, z); r is the half-extent of its bounding box. */
   find(x, z) {
-    return this.items.find(it => Math.hypot(x - it.p.x, z - it.p.z) < it.p.r * 1.05);
+    return this.items.find(it => Math.hypot(x - it.p.x, z - it.p.z) < it.p.r);
   }
   disturb(x, z, amp) {
     const it = this.find(x, z);

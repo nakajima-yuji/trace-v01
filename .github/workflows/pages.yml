@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -26,6 +28,14 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build:pages
+      # v0.1 stays playable at /v01/, built untouched from its tag
+      - name: Build v0.1 into site/v01
+        run: |
+          git worktree add ../trace-v01 v0.1
+          cd ../trace-v01
+          npm ci
+          node scripts/build-pages.mjs
+          cp -r site "$GITHUB_WORKSPACE/site/v01"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

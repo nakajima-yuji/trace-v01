@@ -1,17 +1,17 @@
-// In-browser end-to-end checks (?selftest=1). Drives the truth with scripted moves and
-// verifies that every trace channel responds through the real rendering systems.
+// In-browser end-to-end checks (?selftest=1) for v0.2. Drives the truth with scripted moves and
+// activities, and verifies traces, finds and the observation log through the real systems.
 import { SURFACE } from './rules.js';
-import { localToWorld } from './gait.js';
+import { ST } from './truth.js';
 
 export async function runSelfTest(T) {
-  const { truth, world, stats, trample, water, props } = T;
+  const { truth, world, stats, trample, water, findings } = T;
   const results = [];
   const ok = (name, pass, detail = '') => results.push({ name, pass: !!pass, detail });
   const far = { x: 0, z: -100, mode: 'still' };
   const wait = ms => new Promise(r => setTimeout(r, ms));
-  T.begin(); T.paused = true;
+  T.begin('explore'); T.paused = true;
+  const node = id => world.trails.find(t => t.id === id);
 
-  const clearOf = (x, z, m = 0.6) => !world.obstacles.some(o => Math.hypot(x - o.x, z - o.z) < o.r + m);
   function walk(ax, az, bx, bz, speed = 0.75, timeout = 40) {
     truth.place(ax, az, Math.atan2(bx - ax, bz - az));
     truth.scriptMoveTo(bx, bz, speed);
@@ -21,77 +21,100 @@ export async function runSelfTest(T) {
     }
     return false;
   }
+  /** Put the camera ~1.4 m from a point, at crouch height, looking at it. */
+  function lookFrom(p, yOff = 0.1, dist = 1.4, ang = 0.6) {
+    const x = p.x + Math.sin(ang) * dist, z = p.z + Math.cos(ang) * dist;
+    T.lookAt(p.x, p.y + yOff, p.z, x, world.heightAt(x, z) + 1.0, z);
+  }
 
-  // 1. mud → deep footprints
+  ok('3 つの探索エリア', world.zones.length === 3, world.zones.map(z => z.label).join(' / '));
+  ok('発見対象が 6 つある', Object.keys(world.finds).length === 6, Object.keys(world.finds).join(', '));
+  ok('獣道のグラフ', world.trails.length >= 12 && world.pois.length === 5, `ノード ${world.trails.length}・場所 ${world.pois.length}`);
+
+  // 1. the mud trail keeps clear hoof prints
   {
-    const m = world.muds[3]; m.geometry.computeBoundingBox();
-    const bb = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld);
-    const cx = (bb.min.x + bb.max.x) / 2, cz = (bb.min.z + bb.max.z) / 2, r = (bb.max.x - bb.min.x) / 2 * 0.7;
-    const before = stats.mudPrints;
-    walk(cx - r, cz, cx + r, cz);
-    ok('泥を歩くと深い足跡が残る', stats.mudPrints - before >= 3, `泥の足跡 +${stats.mudPrints - before}`);
+    const a = node('N2'), b = node('N3'), before = stats.mudPrints;
+    walk(a.x, a.z, b.x, b.z);
+    ok('泥の小道を歩くと蹄跡が残る', stats.mudPrints - before >= 4, `泥の足跡 +${stats.mudPrints - before}`);
   }
-  // 2. puddle → ripples
+  // 2. the pond
   {
-    const p = world.puddles[0];
-    const before = stats.ripples;
-    walk(p.x - p.r - 0.8, p.z, p.x + p.r + 0.8, p.z);
-    const e = water.energy();
-    ok('水たまりを通ると波紋が生まれる', stats.ripples - before >= 2 && e > 0.01, `波紋 +${stats.ripples - before}, energy ${e.toFixed(3)}`);
+    const p = world.puddles.find(q => q.name === 'Pond'), poi = world.pois.find(q => q.kind === 'sip'), before = stats.ripples;
+    walk(poi.x + (poi.x - p.x) * 0.4, poi.z + (poi.z - p.z) * 0.4, p.x + (poi.x - p.x) * 0.55, p.z + (poi.z - p.z) * 0.55);
+    ok('池のほとりで水に入ると波紋が生まれる', stats.ripples - before >= 2 && water.energy() > 0.01, `波紋 +${stats.ripples - before}`);
   }
-  // 3. grass → bent path that recovers over time
+  // 3. the meadow: bent and still-quivering grass
   {
-    let seg = null;
-    for (let z = -12; z < 12 && !seg; z += 0.7) for (let x = -12; x < 8 && !seg; x += 0.7) {
-      const pts = [0, 1, 2, 3, 4].map(k => [x + k, z]);
-      if (pts.every(([px, pz]) => world.surfaceAt(px, pz).surface === SURFACE.GRASS && clearOf(px, pz, 1.0))) seg = [x, z];
+    const m = world.meadow;
+    walk(m.x - 3, m.z + 0.5, m.x + 1, m.z - 0.5);
+    const band = f => Math.max(...[-0.3, 0, 0.3].map(dz => f(m.x - 1, m.z + dz)));
+    const bend = band((x, z) => trample.sample(x, z)), quiver = band((x, z) => trample.sampleAgitation(x, z));
+    ok('草むらを通ると草が倒れる', bend > 0.3, `倒れ量 ${bend.toFixed(2)}`);
+    ok('通った直後の草はまだ揺れている（新しさの手掛かり）', quiver > 0.05, `揺れ ${quiver.toFixed(2)}`);
+  }
+  // 4. places the animal uses: resting in the bed, feeding at the nut tree
+  for (const [kind, key] of [[ST.REST, 'Bed'], [ST.FEED, 'Nuts']]) {
+    const poi = world.pois.find(q => q.kind === kind);
+    truth.scripted = false; truth.goal = { ...poi, face: null }; truth.place(poi.x, poi.z); truth.fsm.changeTo(kind);
+    const shellsBefore = findings.shells.length;
+    T.fastForward(12, 1 / 15, far);
+    const age = T.game.t - (findings.lastVisit[key] ?? -1e9);
+    if (kind === ST.REST) ok('寝床で休むと、寝床の草が押さえられる', trample.sample(poi.x, poi.z) > 0.5, `草 ${trample.sample(poi.x, poi.z).toFixed(2)}`);
+    else ok('木の実を食べると新しい殻が落ちる', findings.shells.length > shellsBefore, `新しい殻 +${findings.shells.length - shellsBefore}`);
+    ok(`「${key}」の新しさが真値の行動から決まる`, age < 2, `最終利用から ${age.toFixed(1)} 秒`);
+  }
+  truth.scriptStop();
+  // 5. every find can be observed and logged
+  {
+    let logged = 0; const miss = [];
+    for (const [k, p] of Object.entries(findings.spots)) {
+      lookFrom(p, k === 'Rub' ? 0.7 : 0.05);
+      const e = T.observe();
+      if (e && e.kind === 'find' && e.key === k) logged++; else miss.push(k);
     }
-    if (!seg) ok('草地を歩くと草が倒れる', false, '草地の区間が見つからない');
-    else {
-      walk(seg[0], seg[1], seg[0] + 4, seg[1]);
-      const band = () => Math.max(...[-0.3, -0.15, 0, 0.15, 0.3].map(dz => trample.sample(seg[0] + 2, seg[1] + dz)));
-      const mid = band();
-      T.fastForward(25, 1 / 15, { ...far });
-      const later = band();
-      ok('草地を歩くと草が倒れる', mid > 0.3, `直後の倒れ量 ${mid.toFixed(2)}`);
-      ok('倒れた草は時間で起き上がる（鮮度の手掛かり）', later < mid && later > 0, `25秒後 ${later.toFixed(2)}`);
-      // 5. standing animal pins grass under its hooves
-      truth.place(seg[0] + 2, seg[1] + 0.0, 0); truth.scriptStop();
-      T.fastForward(60, 1 / 15, far);
-      const feet = truth.standingFeet().map(f => trample.sample(f.x, f.z));
-      ok('立ち止まった動物の蹄の下の草は戻らない', Math.min(...feet) > 0.5, `蹄の下 ${feet.map(v => v.toFixed(2)).join('/')}`);
-    }
+    ok('6 つの発見対象をすべて観察・記録できる', logged === 6, miss.length ? `未検出: ${miss.join(',')}` : `記録 ${findings.found.size}/6`);
+    const bed = findings.entries.find(e => e.key === 'Bed');
+    ok('寝床の記録に新しさが書かれる', bed && bed.fresh.includes('今しがた'), bed?.fresh);
   }
-  // 4. branch → snap when a hoof lands on it
+  // 6. a live trace can be logged too
   {
-    const br = props.branches.find(b => !b.snapped && clearOf((b.ax + b.bx) / 2, (b.az + b.bz) / 2, 1.2));
-    const h = Math.atan2(br.bx - br.ax, br.bz - br.az);
-    // body path shifted so the left hooves (+0.10 local x) tread on the branch line
-    const a = localToWorld(-0.10, -1.2, br.ax, br.az, h), b = localToWorld(-0.10, 1.2, br.bx, br.bz, h);
-    const before = stats.snaps;
-    walk(a.x, a.z, b.x, b.z, 0.6);
-    ok('枝を踏むと折れる（音源）', stats.snaps > before, `折れた枝 +${stats.snaps - before}`);
+    const a = node('N3'), b = node('N4');
+    walk(a.x, a.z, b.x, b.z);
+    const rec = T.prints.records.filter(Boolean).filter(r => r.surface === SURFACE.MUD).sort((x, y) => x.age - y.age)[0];
+    const y = world.heightAt(rec.x, rec.z);
+    T.lookAt(rec.x, y, rec.z, rec.x + 0.8, y + 1.0, rec.z + 0.8);
+    const e = T.observe();
+    ok('目の前の蹄跡を記録できる', e && e.kind === 'print', e ? e.note : 'none');
   }
-  // 6. live behaviour + frame rate
-  truth.release(); T.paused = false;
-  await wait(1500);
+  // 7. explore-mode scan: optional, never ends the game
   {
-    // rAF is throttled when the tab is hidden, so time synchronous frames instead
+    truth.release(); T.game.scanCooldown = 0;
+    const miss = T.scanAt(Math.max(-19, truth.x + 7), truth.z);
+    T.game.scanCooldown = 0;
+    const hit = T.scanAt(truth.x + 0.4, truth.z);
+    const blocked = T.scanAt(truth.x, truth.z);
+    ok('自由探索のスキャンはゲームを終わらせない', T.game.state === 'play' && miss && hit?.grade === 'hit' && blocked === null,
+      `外れ ${miss?.grade} → 当たり ${hit?.grade} → 直後は ${blocked === null ? 'クールダウン' : '使えてしまう'}`);
+  }
+  // 8. frame time
+  T.paused = false;
+  await wait(1200);
+  {
     const { renderer, scene, camera } = T, gl = renderer.getContext(), px = new Uint8Array(4);
-    camera.position.set(0, T.world.heightAt(0, 12.5) + 1.62, 12.5); camera.lookAt(0, 0.5, 0);
+    const s = world.spawn;
+    camera.position.set(s.x, world.heightAt(s.x, s.z) + 1.62, s.z); camera.lookAt(s.x, 1, s.z - 10);
     for (let i = 0; i < 5; i++) renderer.render(scene, camera);
-    const t0 = performance.now(), N = 40;
-    for (let i = 0; i < N; i++) { T.fastForward(1 / 60, 1 / 60, far); renderer.render(scene, camera); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+    // pipelined like the real loop (sync once at the end; rAF is throttled while the pane is hidden)
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const t0 = performance.now(), N = 45;
+    for (let i = 0; i < N; i++) {
+      T.fastForward(1 / 60, 1 / 60, far);
+      if (i % 3 === 0) renderer.shadowMap.needsUpdate = true;
+      renderer.render(scene, camera);
+    }
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     const ms = (performance.now() - t0) / N;
-    ok('1フレームの処理時間（シミュレーション＋描画）', ms < 33, `${ms.toFixed(1)} ms ≈ ${(1000 / ms).toFixed(0)} fps @ ${renderer.domElement.width}x${renderer.domElement.height}`);
-  }
-  // 7. scan judgement against the truth
-  {
-    const fx = Math.max(-14, Math.min(14, truth.x + 6));
-    const miss = T.scanAt(fx, truth.z);
-    ok('外れたスキャンは失敗判定', miss && miss.grade !== 'hit', miss ? `${miss.grade} ${miss.dist.toFixed(2)}m` : 'none');
-    const hit = T.scanAt(truth.x + 0.6, truth.z - 0.4);
-    ok('実位置近くのスキャンは成功判定', hit && hit.grade === 'hit' && T.game.result?.win, hit ? `${hit.grade} ${hit.dist.toFixed(2)}m` : 'none');
+    ok('1 フレームの処理時間（シミュレーション＋描画）', ms < 33, `${ms.toFixed(1)} ms ≈ ${(1000 / ms).toFixed(0)} fps @ ${renderer.domElement.width}x${renderer.domElement.height}・草 ${T.grass.count}`);
   }
   const pass = results.filter(r => r.pass).length;
   const el = document.getElementById('selftest');
